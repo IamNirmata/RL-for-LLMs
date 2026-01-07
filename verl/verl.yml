@@ -1,0 +1,120 @@
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  generateName: hari-gcr-admin-bonete-test-
+  namespace: gcr-admin
+spec:
+  queue: gcr-admin
+  minAvailable: 1
+  plugins:
+    ssh: []
+    svc: []
+    env: []
+  tasks:
+    - name: server
+      replicas: 1
+      template:
+        metadata:
+          labels:
+            app: hari-gcr-bonete-test
+            role: server
+        spec:
+          schedulerName: volcano
+          restartPolicy: Never
+
+          # If your cluster needs credentials to pull from nvcr.io, create an imagePullSecret
+          # and uncomment this:
+          # imagePullSecrets:
+          #   - name: nvcr-cred
+
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 256Gi
+            - name: sys
+              hostPath:
+                path: /sys
+                type: Directory
+            - name: data
+              persistentVolumeClaim:
+                claimName: pvc-vast-gcr-admin
+
+          tolerations:
+            - key: "rdma"
+              operator: "Exists"
+              effect: "NoSchedule"
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+
+          containers:
+            - name: server
+              # image: nvcr.io/nvidia/pytorch:25.12-py3
+              image: verlai/verl:vllm011.latest
+              imagePullPolicy: Always
+
+              env:
+                - name: GCRNODE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+
+                - name: ALLPAIR_DEBUG
+                  value: "1"
+                - name: START_ROUND
+                  value: "93"
+
+                # Secrets (from kubectl create secret generic hari-secrets ...)
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hari-secrets
+                      key: HF_TOKEN
+                - name: WANDB_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: hari-secrets
+                      key: WANDB_API_KEY
+
+                - name: WANDB_ENTITY
+                  value: "gcr-admin"
+                - name: WANDB_PROJECT
+                  value: "func_calls_llm"
+                - name: WANDB_RUN_NAME
+                  value: "finetune"
+
+              volumeMounts:
+                - name: dshm
+                  mountPath: /dev/shm
+                - name: sys
+                  mountPath: /sys
+                  readOnly: true
+                - name: data
+                  mountPath: /data
+
+              ports:
+                - name: rdma
+                  containerPort: 18515
+
+              command: ["/bin/bash", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  echo "Pod: ${HOSTNAME} on node: ${GCRNODE}"
+                  nvidia-smi || true
+                  python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'gpus', torch.cuda.device_count())" || true
+                  echo "Sleeping."
+                  sleep infinity
+
+              resources:
+                requests:
+                  nvidia.com/gpu: "8"
+                  cpu: "100"
+                  memory: "1500Gi"
+                  rdma/rdma_shared_device_a: "1"
+                limits:
+                  nvidia.com/gpu: "8"
+                  cpu: "100"
+                  memory: "1500Gi"
+                  rdma/rdma_shared_device_a: "1"
